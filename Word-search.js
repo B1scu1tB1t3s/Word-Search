@@ -13,37 +13,30 @@
  *
  * Or pass them inline:
  *   MW_DICT_KEY=abc MW_THES_KEY=xyz node mw-lookup.js hello
+ *
+ * Debug mode (prints raw API response):
+ *   MW_DEBUG=1 node mw-lookup.js hello
  */
 
 const https = require("https");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DICT_KEY = process.env.MW_DICT_KEY=your_dictionary_api_key;
-const THES_KEY = process.env.MW_THES_KEY=your_thesaurus_api_key;
-const BASE_URL = "https://www.dictionaryapi.com/api/v3/references";
+const DICT_KEY  = process.env.MW_DICT_KEY=your_dictionary_api_key;
+const THES_KEY  = process.env.MW_THES_KEY=your_thesaurus_api_key;
+const DEBUG     = process.env.MW_DEBUG === "1";
+const BASE_URL  = "https://www.dictionaryapi.com/api/v3/references";
 
 // ── ANSI colours ──────────────────────────────────────────────────────────────
 
-const c = {
-  reset:  "\x1b[0m",
-  bold:   "\x1b[1m",
-  dim:    "\x1b[2m",
-  cyan:   "\x1b[36m",
-  yellow: "\x1b[33m",
-  green:  "\x1b[32m",
-  red:    "\x1b[31m",
-  blue:   "\x1b[34m",
-  magenta:"\x1b[35m",
-};
-
-const bold    = (s) => `${c.bold}${s}${c.reset}`;
-const cyan    = (s) => `${c.cyan}${s}${c.reset}`;
-const yellow  = (s) => `${c.yellow}${s}${c.reset}`;
-const green   = (s) => `${c.green}${s}${c.reset}`;
-const dim     = (s) => `${c.dim}${s}${c.reset}`;
-const magenta = (s) => `${c.magenta}${s}${c.reset}`;
-const red     = (s) => `${c.red}${s}${c.reset}`;
+process.stdout.write("\x1b[?25l\x1b[?25h"); // triggers ANSI mode in legacy cmd
+const bold    = (s) => `\x1b[1m${s}\x1b[0m`;
+const dim     = (s) => `\x1b[2m${s}\x1b[0m`;
+const cyan    = (s) => `\x1b[36m${s}\x1b[0m`;
+const yellow  = (s) => `\x1b[33m${s}\x1b[0m`;
+const green   = (s) => `\x1b[32m${s}\x1b[0m`;
+const red     = (s) => `\x1b[31m${s}\x1b[0m`;
+const magenta = (s) => `\x1b[35m${s}\x1b[0m`;
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
@@ -53,188 +46,182 @@ function get(url) {
       let data = "";
       res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Failed to parse response: ${data.slice(0, 120)}`));
-        }
+        try { resolve(JSON.parse(data)); }
+        catch { reject(new Error(`Bad JSON: ${data.slice(0, 200)}`)); }
       });
     }).on("error", reject);
   });
 }
 
-// ── MW text-markup parser ─────────────────────────────────────────────────────
-// Strips {bc}, {sx|...|}, {it}...{/it}, {b}...{/b}, {ldquo}/{rdquo}, etc.
+// ── MW inline markup → plain/styled text ─────────────────────────────────────
 
-function parseMarkup(text = "") {
+function markup(text = "") {
   return text
     .replace(/\{bc\}/g, ": ")
     .replace(/\{ldquo\}/g, "\u201c")
     .replace(/\{rdquo\}/g, "\u201d")
     .replace(/\{inf\}(.*?)\{\/inf\}/g, "$1")
     .replace(/\{sup\}(.*?)\{\/sup\}/g, "$1")
-    .replace(/\{it\}(.*?)\{\/it\}/g, (_, s) => dim(s))
-    .replace(/\{b\}(.*?)\{\/b\}/g,   (_, s) => bold(s))
-    .replace(/\{sc\}(.*?)\{\/sc\}/g, (_, s) => s.toUpperCase())
+    .replace(/\{it\}(.*?)\{\/it\}/g,   (_, s) => dim(s))
+    .replace(/\{b\}(.*?)\{\/b\}/g,     (_, s) => bold(s))
+    .replace(/\{sc\}(.*?)\{\/sc\}/g,   (_, s) => s.toUpperCase())
     .replace(/\{sx\|([^|]+)\|[^}]*\}/g, (_, w) => cyan(w))
-    .replace(/\{a_link\|([^}]+)\}/g, (_, w) => cyan(w))
-    .replace(/\{d_link\|([^|]+)\|[^}]*\}/g, (_, w) => cyan(w))
-    .replace(/\{[^}]+\}/g, "")   // strip any remaining tags
+    .replace(/\{[a-z_]+\|([^|]+)\|[^}]*\}/g, (_, w) => cyan(w))
+    .replace(/\{[^}]+\}/g, "")
     .trim();
 }
 
-// ── Recursive definition-tree walker ─────────────────────────────────────────
+// ── Extract text from a dt (definition text) array ───────────────────────────
 
-function collectDefs(defSection, results = [], depth = 0) {
-  for (const node of defSection) {
-    if (!Array.isArray(node)) continue;
-    const [tag, ...rest] = node;
-    if (tag === "sense") {
-      // rest[0] is an object with optional sn, dt, sdsense, etc.
-      const sense = rest[0] || {};
-      const sn = sense.sn ? dim(`[${sense.sn}]`) + " " : "";
-      const dt = sense.dt || [];
-      for (const dtNode of dt) {
-        if (Array.isArray(dtNode) && dtNode[0] === "text") {
-          results.push(`  ${"  ".repeat(depth)}${sn}${parseMarkup(dtNode[1])}`);
-        }
-      }
-      // sdsense = divided sense
-      if (sense.sdsense) {
-        const sd = sense.sdsense;
-        const sdLabel = sd.sd ? dim(`  (${sd.sd}) `) : "";
-        const sdDt = sd.dt || [];
-        for (const dtNode of sdDt) {
-          if (Array.isArray(dtNode) && dtNode[0] === "text") {
-            results.push(`  ${"  ".repeat(depth + 1)}${sdLabel}${parseMarkup(dtNode[1])}`);
+function dtText(dt = []) {
+  return dt
+    .filter((n) => Array.isArray(n) && n[0] === "text")
+    .map((n) => markup(n[1]))
+    .join(" ");
+}
+
+// ── Parse one sense object into output lines ──────────────────────────────────
+
+function parseSense(sense, indent = "  ") {
+  const lines = [];
+  const sn    = sense.sn ? dim(`[${sense.sn}]`) + " " : "";
+  const text  = dtText(sense.dt);
+  if (text) lines.push(`${indent}${sn}${text}`);
+
+  // divided sense  e.g. "a : ... broadly : ..."
+  if (sense.sdsense) {
+    const label = sense.sdsense.sd ? dim(`${sense.sdsense.sd} `) : "";
+    const sdtxt = dtText(sense.sdsense.dt);
+    if (sdtxt) lines.push(`${indent}  ${label}${sdtxt}`);
+  }
+  return lines;
+}
+
+// ── Walk an sseq (sense sequence) ────────────────────────────────────────────
+//
+//  MW structure:
+//    def[i].sseq   →  array of "sense groups"
+//    sense group   →  array of sense-nodes: [ [tag, content], … ]
+//    tags          →  "sense" | "bs" | "pseq" | "sen" | "sn" …
+
+function walkSseq(sseq = []) {
+  const lines = [];
+  for (const senseGroup of sseq) {
+    for (const node of senseGroup) {
+      if (!Array.isArray(node)) continue;
+      const [tag, content] = node;
+
+      if (tag === "sense") {
+        lines.push(...parseSense(content));
+
+      } else if (tag === "bs") {
+        // binding substitution — wraps a sense one level deeper
+        if (content && content.sense) lines.push(...parseSense(content.sense));
+
+      } else if (tag === "pseq") {
+        // parenthesized sense sequence — content is an array of nodes
+        for (const inner of content) {
+          if (Array.isArray(inner) && inner[0] === "sense") {
+            lines.push(...parseSense(inner[1], "    "));
           }
         }
       }
-    } else if (tag === "pseq" || tag === "sseq" || tag === "bs") {
-      collectDefs(rest, results, depth + 1);
     }
   }
-  return results;
+  return lines;
 }
 
-// ── Dictionary formatter ──────────────────────────────────────────────────────
+// ── Dictionary output ─────────────────────────────────────────────────────────
 
 function formatDictionary(entries, word) {
-  const lines = [];
-  lines.push(`\n${bold(cyan("━━━ DICTIONARY"))}  ${bold(word.toUpperCase())}\n`);
-
-  // Group entries by headword so we can show each form cleanly
-  const shown = new Set();
+  const out  = [`\n${bold(cyan("━━━ DICTIONARY"))}  ${bold(word.toUpperCase())}\n`];
+  const seen = new Set();
 
   for (const entry of entries) {
     if (typeof entry !== "object" || !entry.meta) continue;
+    if (seen.has(entry.meta.id)) continue;
+    seen.add(entry.meta.id);
 
-    const hw   = (entry.hwi?.hw || entry.meta.id).replace(/\*/g, "·");
-    const fl   = entry.fl   || "";           // functional label (part of speech)
-    const prs  = entry.hwi?.prs?.[0]?.mw || "";
-    const key  = entry.meta.id;
+    const hw   = (entry.hwi?.hw ?? entry.meta.id).replace(/\*/g, "·");
+    const pron = entry.hwi?.prs?.[0]?.mw ? dim(` /${entry.hwi.prs[0].mw}/`) : "";
+    const fl   = entry.fl ? magenta(entry.fl) : "";
 
-    if (shown.has(key)) continue;
-    shown.add(key);
+    out.push(`${bold(yellow(hw))}${pron}  ${fl}`);
 
-    // Headword line
-    const pron = prs ? dim(` /${prs}/`) : "";
-    lines.push(`${bold(yellow(hw))}${pron}  ${magenta(fl)}`);
-
-    // Definitions
-    const defs = entry.def || [];
-    for (const defBlock of defs) {
-      const vd = defBlock.vd ? `  ${dim(defBlock.vd)}\n` : "";
-      if (vd) lines.push(vd);
-      const sseq = defBlock.sseq || [];
-      const collected = collectDefs(sseq);
-      lines.push(...collected);
+    let hadDefs = false;
+    for (const defBlock of (entry.def ?? [])) {
+      if (defBlock.vd) out.push(`  ${dim(defBlock.vd)}`);
+      const defs = walkSseq(defBlock.sseq);
+      if (defs.length) { out.push(...defs); hadDefs = true; }
     }
 
-    // Short definitions (fallback if def tree is empty)
-    if ((entry.def || []).length === 0 && entry.shortdef) {
-      entry.shortdef.forEach((d, i) => lines.push(`  ${dim(i + 1 + ".")} ${parseMarkup(d)}`));
+    // Fallback to shortdef if sseq yielded nothing
+    if (!hadDefs && entry.shortdef?.length) {
+      entry.shortdef.forEach((d, i) => out.push(`  ${dim(i + 1 + ".")} ${markup(d)}`));
     }
 
-    // Usage / etymology snippets
-    if (entry.et) {
-      const etText = entry.et
-        .filter(([t]) => t === "text")
-        .map(([, v]) => parseMarkup(v))
-        .join(" ");
-      if (etText) lines.push(`\n  ${dim("Etymology:")} ${dim(etText)}`);
-    }
+    // Etymology
+    const etText = (entry.et ?? [])
+      .filter(([t]) => t === "text")
+      .map(([, v]) => markup(v))
+      .join(" ");
+    if (etText) out.push(`\n  ${dim("Etymology:")} ${dim(etText)}`);
 
-    lines.push(""); // spacer between entries
+    out.push("");
   }
-
-  return lines.join("\n");
+  return out.join("\n");
 }
 
-// ── Thesaurus formatter ───────────────────────────────────────────────────────
+// ── Thesaurus output ──────────────────────────────────────────────────────────
 
 function formatThesaurus(entries, word) {
-  const lines = [];
-  lines.push(`\n${bold(green("━━━ THESAURUS"))}  ${bold(word.toUpperCase())}\n`);
-
-  const shown = new Set();
+  const out  = [`\n${bold(green("━━━ THESAURUS"))}  ${bold(word.toUpperCase())}\n`];
+  const seen = new Set();
 
   for (const entry of entries) {
     if (typeof entry !== "object" || !entry.meta) continue;
+    if (seen.has(entry.meta.id)) continue;
+    seen.add(entry.meta.id);
 
-    const hw = (entry.hwi?.hw || entry.meta.id).replace(/\*/g, "·");
-    const fl = entry.fl || "";
-    const key = entry.meta.id;
+    const hw = (entry.hwi?.hw ?? entry.meta.id).replace(/\*/g, "·");
+    const fl = entry.fl ? magenta(entry.fl) : "";
+    out.push(`${bold(yellow(hw))}  ${fl}`);
 
-    if (shown.has(key)) continue;
-    shown.add(key);
-
-    lines.push(`${bold(yellow(hw))}  ${magenta(fl)}`);
-
-    const defs = entry.def || [];
-    for (const defBlock of defs) {
-      for (const sseqRow of defBlock.sseq || []) {
-        for (const node of sseqRow) {
+    for (const defBlock of (entry.def ?? [])) {
+      for (const senseGroup of (defBlock.sseq ?? [])) {
+        for (const node of senseGroup) {
           if (!Array.isArray(node) || node[0] !== "sense") continue;
-          const sense = node[1] || {};
+          const sense = node[1];
           const sn    = sense.sn ? dim(`[${sense.sn}]`) + " " : "";
 
-          // Sense definition text
-          const defText = (sense.dt || [])
-            .filter(([t]) => t === "text")
-            .map(([, v]) => parseMarkup(v))
-            .join(" ");
-          if (defText) lines.push(`  ${sn}${defText}`);
+          const defText = dtText(sense.dt);
+          if (defText) out.push(`  ${sn}${defText}`);
 
-          // Synonyms
-          const syns = (sense.syn_list || []).flat().map((s) => s.wd).filter(Boolean);
-          if (syns.length) lines.push(`    ${green("synonyms:")}  ${syns.join(", ")}`);
+          const words = (list) => (list ?? []).flat().map((s) => s.wd).filter(Boolean);
 
-          // Related words
-          const rels = (sense.rel_list || []).flat().map((s) => s.wd).filter(Boolean);
-          if (rels.length) lines.push(`    ${cyan("related:")}   ${rels.join(", ")}`);
+          const syns  = words(sense.syn_list);
+          const rels  = words(sense.rel_list);
+          const nears = words(sense.near_list);
+          const ants  = words(sense.ant_list);
 
-          // Near antonyms
-          const nears = (sense.near_list || []).flat().map((s) => s.wd).filter(Boolean);
-          if (nears.length) lines.push(`    ${yellow("near ant:")} ${nears.join(", ")}`);
-
-          // Antonyms
-          const ants = (sense.ant_list || []).flat().map((s) => s.wd).filter(Boolean);
-          if (ants.length) lines.push(`    ${red("antonyms:")}  ${ants.join(", ")}`);
+          if (syns.length)  out.push(`    ${green("synonyms:")}   ${syns.join(", ")}`);
+          if (rels.length)  out.push(`    ${cyan("related:")}    ${rels.join(", ")}`);
+          if (nears.length) out.push(`    ${yellow("near ant:")}  ${nears.join(", ")}`);
+          if (ants.length)  out.push(`    ${red("antonyms:")}   ${ants.join(", ")}`);
+          if (syns.length || rels.length || nears.length || ants.length) out.push("");
         }
       }
     }
-    lines.push("");
+    out.push("");
   }
-
-  return lines.join("\n");
+  return out.join("\n");
 }
 
-// ── Suggestions handler ───────────────────────────────────────────────────────
+// ── Suggestions ───────────────────────────────────────────────────────────────
 
-function formatSuggestions(data, word, source) {
-  if (!Array.isArray(data) || data.length === 0 || typeof data[0] !== "string") return "";
-  return `\n${dim(`No ${source} results for "${word}". Did you mean one of these?`)}\n` +
+function suggestions(data, word, source) {
+  if (!Array.isArray(data) || !data.length || typeof data[0] !== "string") return null;
+  return `\n${dim(`No ${source} results for "${word}". Did you mean:`)}\n` +
     data.map((s) => `  • ${cyan(s)}`).join("\n");
 }
 
@@ -250,15 +237,15 @@ async function main() {
 
   if (!DICT_KEY && !THES_KEY) {
     console.error(
-      red("No API keys found.") +
-      "\nSet MW_DICT_KEY and/or MW_THES_KEY environment variables." +
-      "\nGet free keys at: https://dictionaryapi.com/register/index"
+      red("No API keys found.\n") +
+      "Set MW_DICT_KEY and/or MW_THES_KEY as environment variables.\n" +
+      "Get free keys at: https://dictionaryapi.com/register/index"
     );
     process.exit(1);
   }
 
   const encoded = encodeURIComponent(word.toLowerCase());
-  const tasks = [];
+  const tasks   = [];
 
   if (DICT_KEY) {
     tasks.push(
@@ -267,7 +254,6 @@ async function main() {
         .catch((err) => ({ type: "dict", error: err.message }))
     );
   }
-
   if (THES_KEY) {
     tasks.push(
       get(`${BASE_URL}/thesaurus/json/${encoded}?key=${THES_KEY}`)
@@ -278,28 +264,22 @@ async function main() {
 
   const results = await Promise.all(tasks);
 
-  for (const result of results) {
-    if (result.error) {
-      console.error(red(`Error (${result.type}): ${result.error}`));
-      continue;
-    }
+  for (const { type, data, error } of results) {
+    if (error) { console.error(red(`Error (${type}): ${error}`)); continue; }
 
-    const { type, data } = result;
+    if (DEBUG) console.error(`\n[DEBUG ${type}]\n`, JSON.stringify(data, null, 2));
+
+    const isEntries = Array.isArray(data) && data.length && typeof data[0] === "object";
 
     if (type === "dict") {
-      if (Array.isArray(data) && data.length && typeof data[0] === "object") {
-        console.log(formatDictionary(data, word));
-      } else {
-        console.log(formatSuggestions(data, word, "dictionary"));
-      }
+      console.log(isEntries
+        ? formatDictionary(data, word)
+        : (suggestions(data, word, "dictionary") ?? red(`No dictionary results for "${word}"`)));
     }
-
     if (type === "thes") {
-      if (Array.isArray(data) && data.length && typeof data[0] === "object") {
-        console.log(formatThesaurus(data, word));
-      } else {
-        console.log(formatSuggestions(data, word, "thesaurus"));
-      }
+      console.log(isEntries
+        ? formatThesaurus(data, word)
+        : (suggestions(data, word, "thesaurus") ?? red(`No thesaurus results for "${word}"`)));
     }
   }
 }
