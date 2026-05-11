@@ -44,8 +44,8 @@ param(
     [Parameter(Position = 0)]
     [string]$Word,
 
-    [string]$DictionaryApiKey = $env:MW_DICTIONARY_KEY,
-    [string]$ThesaurusApiKey  = $env:MW_THESAURUS_KEY,
+    [string]$DictionaryApiKey = $env:MW_DICTIONARY_KEY = "your-dictionary-key-here",
+    [string]$ThesaurusApiKey  = $env:MW_THESAURUS_KEY  = "your-thesaurus-key-here",
 
     [switch]$SkipDictionary,
     [switch]$SkipThesaurus,
