@@ -44,8 +44,8 @@ param(
     [Parameter(Position = 0)]
     [string]$Word,
 
-    [string]$DictionaryApiKey = $env:MW_DICTIONARY_KEY = "your-dictionary-key-here",
-    [string]$ThesaurusApiKey  = $env:MW_THESAURUS_KEY  = "your-thesaurus-key-here",
+    [string]$DictionaryApiKey = "your-dictionary-key-here",
+    [string]$ThesaurusApiKey  = "your-thesaurus-key-here",
 
     [switch]$SkipDictionary,
     [switch]$SkipThesaurus,
@@ -122,7 +122,7 @@ function Get-DefinitionTexts {
 function Invoke-MWApi {
     param([string]$Word, [string]$ApiKey, [string]$Type)
     $encoded = [uri]::EscapeDataString($Word)
-    $url     = "https://www.dictionaryapi.com/api/v3/references/$Type/json/${encoded}?key=${ApiKey}"
+    $url     = "https://dictionaryapi.com/account/my-keys/$Type/json/${encoded}?key=${ApiKey}"
     try {
         $response = Invoke-RestMethod -Uri $url -Method Get -ErrorAction Stop
         return $response
