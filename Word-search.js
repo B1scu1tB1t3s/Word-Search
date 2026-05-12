@@ -22,8 +22,8 @@ const https = require("https");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DICT_KEY  = process.env.MW_DICT_KEY=your_dictionary_api_key;
-const THES_KEY  = process.env.MW_THES_KEY=your_thesaurus_api_key;
+const DICT_KEY  = "your_dictionary_key";
+const THES_KEY  = "your_thesaurus_key";
 const DEBUG     = process.env.MW_DEBUG === "1";
 const BASE_URL  = "https://www.dictionaryapi.com/api/v3/references";
 
